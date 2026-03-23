@@ -32,6 +32,12 @@ Other pages give instructions for running the code.
 
 Since AthenaK is very similar to Athena++, the [Athena++ documention](https://github.com/PrincetonUniversity/athena/wiki) may also be helpful.
 
+### Guides for specific use cases
+
+| Guide | Description |
+|-------|-------------|
+| [Elliptica BNS](docs/ELLIPTICA_BNS_GUIDE.md) | Running binary neutron star simulations with Elliptica initial data |
+
 ## Code papers
 
 For more details on the features and algorithms implemented in AthenaK, see the code papers:
