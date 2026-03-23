@@ -368,39 +368,185 @@ dt        = 375.0
 
 ## Running the Simulation
 
-### Serial / OpenMP (single node)
+On a university HPC cluster the recommended way to run AthenaK is to submit
+the simulation as a **SLURM batch job** via `sbatch`. This lets the scheduler
+allocate the requested resources, keeps the job alive after you log out, and
+allows you to chain restart jobs automatically.
+
+### Step 1 – Copy and adapt the job script
+
+Two template job scripts are provided below. Copy the one that matches your
+hardware, save it (e.g. as `run_bns.sh`), and adjust every line marked with
+`# EDIT`.
+
+---
+
+#### Template A – CPU / MPI (multi-core or multi-node)
 
 ```bash
-cd /path/to/build_elliptica
-./src/athena -i /path/to/inputs/dyngr/elliptica_bns.athinput
+#!/bin/bash
+#SBATCH --job-name=athenak_bns          # Name shown in the queue
+#SBATCH --partition=standard            # EDIT: your cluster's partition/queue
+#SBATCH --nodes=4                       # EDIT: number of nodes
+#SBATCH --ntasks-per-node=32            # EDIT: MPI ranks per node (≤ cores/node)
+#SBATCH --cpus-per-task=1               # OpenMP threads per rank (increase if needed)
+#SBATCH --mem=0                         # Use all available memory on each node
+#SBATCH --time=48:00:00                 # EDIT: wall-clock limit (HH:MM:SS)
+#SBATCH --output=bns_%j.out             # stdout  (%j = job ID)
+#SBATCH --error=bns_%j.err              # stderr
+
+# --- Environment ---------------------------------------------------------
+module purge
+module load gcc/12 openmpi/4.1          # EDIT: your site's MPI module
+
+# If AthenaK was built with OpenMP support, set the thread count here:
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+export OMP_PROC_BIND=close
+
+# --- Paths ---------------------------------------------------------------
+ATHENAK_BUILD=/path/to/build_elliptica  # EDIT
+ATHINPUT=/path/to/inputs/dyngr/elliptica_bns.athinput  # EDIT
+ELLIPTICA_DATA=/path/to/elliptica_output_dir           # EDIT
+
+# --- Run -----------------------------------------------------------------
+cd ${ATHENAK_BUILD}
+
+srun ./src/athena \
+  -i ${ATHINPUT} \
+  problem/initial_data_file=${ELLIPTICA_DATA}
 ```
 
-### MPI (multi-node)
+> **Tip – MeshBlock count ≥ MPI ranks:**
+> Make sure `(nx1/mb_nx1) × (nx2/mb_nx2) × (nx3/mb_nx3)` is at least equal to
+> `--nodes × --ntasks-per-node`, otherwise AthenaK will abort at startup.
+
+---
+
+#### Template B – GPU / CUDA (one MPI rank per GPU)
 
 ```bash
-mpirun -np <N_ranks> ./src/athena -i /path/to/inputs/dyngr/elliptica_bns.athinput
+#!/bin/bash
+#SBATCH --job-name=athenak_bns_gpu      # Name shown in the queue
+#SBATCH --partition=gpu                 # EDIT: your GPU partition/queue
+#SBATCH --nodes=2                       # EDIT: number of GPU nodes
+#SBATCH --ntasks-per-node=4             # EDIT: GPUs per node (= MPI ranks per node)
+#SBATCH --gpus-per-task=1               # One GPU per MPI rank
+#SBATCH --cpus-per-task=8               # EDIT: CPU cores available to each rank
+#SBATCH --mem=0
+#SBATCH --time=48:00:00                 # EDIT: wall-clock limit
+#SBATCH --output=bns_gpu_%j.out
+#SBATCH --error=bns_gpu_%j.err
+
+# --- Environment ---------------------------------------------------------
+module purge
+module load gcc/12 cuda/12.2 openmpi/4.1   # EDIT: your site's modules
+
+export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+
+# --- Paths ---------------------------------------------------------------
+ATHENAK_BUILD=/path/to/build_elliptica  # EDIT
+ATHINPUT=/path/to/inputs/dyngr/elliptica_bns.athinput  # EDIT
+ELLIPTICA_DATA=/path/to/elliptica_output_dir           # EDIT
+
+# --- Run -----------------------------------------------------------------
+cd ${ATHENAK_BUILD}
+
+# srun automatically sets CUDA_VISIBLE_DEVICES for each rank when
+# --gpus-per-task=1 is used; no manual binding needed in most cases.
+srun ./src/athena \
+  -i ${ATHINPUT} \
+  problem/initial_data_file=${ELLIPTICA_DATA}
 ```
 
-Replace `<N_ranks>` with the number of MPI ranks. On large clusters use your
-site's job scheduler (`srun`, `jsrun`, etc.) instead of `mpirun`.
+---
 
-### GPU (MPI + CUDA example)
+### Step 2 – Submit the job
 
 ```bash
-mpirun -np <N_GPUs> --bind-to socket ./src/athena \
-  -i /path/to/inputs/dyngr/elliptica_bns.athinput
+sbatch run_bns.sh
 ```
 
-Use one MPI rank per GPU. Set `CUDA_VISIBLE_DEVICES` if needed.
+Monitor the job with:
+
+```bash
+squeue -u $USER          # show your running/pending jobs
+scontrol show job <JOBID> # detailed job information
+```
+
+---
+
+### Step 3 – Restarting within SLURM (checkpoint chains)
+
+When the wall-clock limit is reached SLURM will kill the job. Use AthenaK's
+restart capability to continue automatically by submitting a restart job from
+inside the job script:
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=athenak_bns_restart
+#SBATCH --partition=standard            # EDIT
+#SBATCH --nodes=4                       # EDIT (must match original run)
+#SBATCH --ntasks-per-node=32            # EDIT
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=0
+#SBATCH --time=48:00:00
+#SBATCH --output=bns_restart_%j.out
+#SBATCH --error=bns_restart_%j.err
+
+module purge
+module load gcc/12 openmpi/4.1         # EDIT
+
+ATHENAK_BUILD=/path/to/build_elliptica # EDIT
+OUTPUT_DIR=/path/to/output             # EDIT: directory containing .rst files
+
+cd ${ATHENAK_BUILD}
+
+# Pick the latest restart file automatically
+RST_FILE=$(ls -t ${OUTPUT_DIR}/bns.rst.?????.rst 2>/dev/null | head -1)
+
+if [ -z "${RST_FILE}" ]; then
+  echo "ERROR: no restart file found in ${OUTPUT_DIR}" >&2
+  exit 1
+fi
+
+echo "Restarting from ${RST_FILE}"
+srun ./src/athena -r ${RST_FILE}
+```
+
+You can also self-chain a restart by having SLURM submit the next job before
+the current one ends:
+
+```bash
+# At the end of your original run_bns.sh, add:
+sbatch run_bns_restart.sh
+```
+
+---
 
 ### Command-line parameter overrides
 
-Any input parameter can be overridden on the command line:
+Any input-file parameter can be overridden on the command line (works with
+both `sbatch` scripts and interactive runs):
 
 ```bash
-./src/athena -i elliptica_bns.athinput \
-  mesh/tlim=10000 \
+srun ./src/athena -i elliptica_bns.athinput \
+  time/tlim=10000 \
   problem/initial_data_file=/new/path/to/elliptica_data
+```
+
+---
+
+### Quick interactive test (single node, no scheduler)
+
+For short test runs on a login node or a single interactive allocation:
+
+```bash
+cd /path/to/build_elliptica
+# Serial / OpenMP
+./src/athena -i /path/to/inputs/dyngr/elliptica_bns.athinput
+
+# MPI (use srun inside an salloc session, not mpirun, on most clusters)
+srun -n <N_ranks> ./src/athena -i /path/to/inputs/dyngr/elliptica_bns.athinput
 ```
 
 ---
