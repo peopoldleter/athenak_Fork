@@ -1,0 +1,272 @@
+# AthenaK input file for Elliptica black hole – neutron star (BHNS) initial data
+#
+# Usage
+# -----
+#   athenak -i elliptica_bhns.athinput
+#
+# Before running:
+#   1. Set <problem>/initial_data_file to the path of your Elliptica BHNS output
+#      directory (the one that contains the ID files produced by Elliptica).
+#   2. Adjust the NS and BH x-positions under <z4c> to match the actual
+#      coordinate positions reported by your Elliptica solve.
+#   3. If you used a tabulated EoS in Elliptica, uncomment and set
+#      <problem>/initial_data_table.
+#   4. Update the piecewise-polytrope coefficients in <mhd> to match the EoS
+#      used in your Elliptica solve.
+#
+# Key differences from elliptica_bns.athinput
+# --------------------------------------------
+#   * <coord> has excise = true, plus dexcise/pexcise atmosphere parameters that
+#     are applied inside the BH apparent horizon by the EOS/primitive solver.
+#   * <z4c> compact-object tracker: co_0 is type BH, co_1 is type NS.
+#   * <z4c_amr> uses the "tracker" method so the finest grid follows both
+#     compact objects throughout the inspiral.
+#   * <problem>/initial_data_table uses the key "NS_EoS_table_path" (single NS).
+
+<comment>
+problem   = Elliptica BHNS data
+
+<job>
+basename  = bhns
+
+# ---------------------------------------------------------------------------
+# Global mesh
+# ---------------------------------------------------------------------------
+# Domain size: ±1536 M covers gravitational-wave extraction radii up to 600 M
+# and provides a long causal buffer to outflow boundaries.
+# For a typical BHNS with total mass M ~ 4–6 M_sun, 1 M_sun ~ 1.5 km.
+<mesh>
+nghost     = 4        # Ghost cells (must be ≥ 4 for WENOZ reconstruction)
+
+nx1        = 192      # Total zones in X1
+x1min      = -1536    # Domain left edge  (geometric units: G = c = M_sun = 1)
+x1max      =  1536    # Domain right edge
+ix1_bc     = outflow  # Inner-X1 boundary condition
+ox1_bc     = outflow  # Outer-X1 boundary condition
+
+nx2        = 192      # Total zones in X2
+x2min      = -1536
+x2max      =  1536
+ix2_bc     = outflow
+ox2_bc     = outflow
+
+nx3        = 192      # Total zones in X3
+x3min      = -1536
+x3max      =  1536
+ix3_bc     = outflow
+ox3_bc     = outflow
+
+# ---------------------------------------------------------------------------
+# MeshBlock size
+# ---------------------------------------------------------------------------
+# Multiples of 32 work best on GPUs.
+<meshblock>
+nx1        = 32
+nx2        = 32
+nx3        = 32
+
+# ---------------------------------------------------------------------------
+# Adaptive mesh refinement
+# ---------------------------------------------------------------------------
+<mesh_refinement>
+refinement          = adaptive
+max_nmb_per_rank    = 100   # Increase for large parallel runs
+num_levels          = 7     # Total refinement levels (finest = base × 2^6 here)
+refinement_interval = 1     # Re-evaluate AMR criterion every time step
+
+# Use the user-defined criterion (delegates to Z4c tracker; see <z4c_amr>)
+<amr_criterion0>
+method = user
+
+# Z4c AMR: keep finest grid centred on both compact objects
+<z4c_amr>
+method = tracker
+
+# Static refined boxes around each compact object at t=0 to improve initial
+# interpolation.  Adjust the x-coordinates to match the actual binary
+# separation from your Elliptica run.
+#
+# Box 1: surrounds the neutron star (positive x side)
+<refined_region1>
+level = 6
+x1min =   6.0
+x1max =  26.0
+x2min = -10.0
+x2max =  10.0
+x3min = -10.0
+x3max =  10.0
+
+# Box 2: surrounds the black hole (negative x side)
+<refined_region2>
+level = 6
+x1min = -26.0
+x1max =  -6.0
+x2min = -10.0
+x2max =  10.0
+x3min = -10.0
+x3max =  10.0
+
+# ---------------------------------------------------------------------------
+# Time integration
+# ---------------------------------------------------------------------------
+<time>
+evolution  = dynamic  # Must be "dynamic" for GRMHD
+integrator = rk3      # Third-order Runge-Kutta
+cfl_number = 0.25     # CFL number (< 0.3 recommended for BHNS)
+nlim       = -1       # No cycle limit; tlim controls the end time
+tlim       = 5000     # End time in geometric units
+ndiag      = 1        # Diagnostic output every N cycles
+
+# ---------------------------------------------------------------------------
+# Coordinate / spacetime settings
+# ---------------------------------------------------------------------------
+<coord>
+general_rel = true    # Enable full GR treatment
+
+# BH excision: apply atmosphere (dexcise, pexcise) inside the apparent horizon.
+# The excision region is determined dynamically from the conformal factor chi
+# (see <z4c>/excise_chi).
+excise      = true
+dexcise     = 1.28e-21   # Rest-mass density inside excised region (= dfloor)
+pexcise     = 1.58255e-19 # Pressure inside excised region        (= tfloor)
+
+# m and a are not used when excise = true and the spacetime is dynamic.
+m           = 0.0
+a           = 0.0
+
+# ---------------------------------------------------------------------------
+# MHD and equation of state
+# ---------------------------------------------------------------------------
+<mhd>
+eos         = ideal          # Required keyword; actual EOS is set by dyn_eos
+gamma       = 2.0            # Placeholder; ignored when dyn_eos = piecewise_poly
+
+dyn_eos     = piecewise_poly # Piecewise polytrope (SLy EOS parameters below)
+dyn_error   = reset_floor    # Primitive recovery error policy
+reconstruct = wenoz           # WENOZ spatial reconstruction
+rsolver     = llf            # Local Lax-Friedrichs Riemann solver (robust)
+
+dfloor      = 1.28e-21       # Density floor in geometric units
+tfloor      = 1.58255e-19    # Temperature (pressure) floor in geometric units
+dthreshold  = 1.0
+dyn_scratch = 0
+fofc        = false
+c2p_tol     = 2.49e-13
+gamma_max   = 20.025         # Maximum Lorentz factor ceiling
+
+# Piecewise polytrope coefficients (SLy EOS, 4 pieces).
+# Adjust these to match the EOS used in your Elliptica solve.
+pwp_poly_rmd          = 5.340089573220712e+23
+pwp_density_pieces_0  = 0.000000000000000e+00
+pwp_density_pieces_1  = 1.136499842827129e+17
+pwp_density_pieces_2  = 5.011872336272714e+17
+pwp_density_pieces_3  = 9.999999999999999e+17
+pwp_gamma_pieces_0    = 1.356920000000000e+00
+pwp_gamma_pieces_1    = 3.456000000000000e+00
+pwp_gamma_pieces_2    = 3.011000000000000e+00
+pwp_gamma_pieces_3    = 1.425000000000000e+00
+pwp_gamma_thermal     = 1.7
+
+# ---------------------------------------------------------------------------
+# ADM variables (no parameters needed; leave block empty)
+# ---------------------------------------------------------------------------
+<adm>
+
+# ---------------------------------------------------------------------------
+# Z4c numerical relativity parameters
+# ---------------------------------------------------------------------------
+<z4c>
+# 1+log slicing and Gamma-driver shift conditions
+lapse_oplog     = 2.0
+lapse_harmonicf = 1.0
+lapse_harmonic  = 0.0
+lapse_advect    = 1.0
+shift_eta       = 0.3    # Gamma-driver damping (~1/M_ADM for a typical BHNS)
+shift_advect    = 1.0
+
+# Kreiss-Oliger artificial dissipation
+diss            = 0.5
+
+# Conformal factor and constraint damping
+chi_div_floor   = 1e-05
+excise_chi      = 0.0625  # Excise cells where chi < this threshold (inside BH)
+damp_kappa1     = 0.02
+damp_kappa2     = 0.0
+
+# Gravitational-wave extraction via the Newman-Penrose scalar Psi4
+nrad_wave_extraction = 3
+extraction_radius_1  = 200
+extraction_radius_2  = 400
+extraction_radius_3  = 600
+waveform_dt          = 2.5   # Output interval for waveform data
+
+# Compact-object trackers.
+# co_0: black hole  – update x-position to match your Elliptica output.
+# co_1: neutron star – update x-position to match your Elliptica output.
+# A typical BHNS with separation d places the BH at roughly -d*M_NS/M_total
+# and the NS at +d*M_BH/M_total (centre-of-mass frame).
+nco          = 2
+co_0_type    = BH
+co_0_x       = -16.0    # x-coordinate of the BH at t=0 (geometric units)
+co_0_radius  = 6.0      # Tracking search radius around the BH
+co_1_type    = NS
+co_1_x       =  16.0    # x-coordinate of the NS at t=0 (geometric units)
+co_1_radius  =  8.2     # Tracking search radius around the NS
+
+# ---------------------------------------------------------------------------
+# Problem-generator parameters (Elliptica-specific)
+# ---------------------------------------------------------------------------
+<problem>
+# REQUIRED: path to the Elliptica output directory produced by your Elliptica
+# BHNS run (the directory that contains the ID binary files).
+initial_data_file  = /path/to/your/elliptica_bhns_output_dir
+
+# OPTIONAL: path to the EOS table if you used a tabulated EoS in Elliptica.
+# For BHNS, only one NS EoS table is needed (key differs from BNS).
+# Comment out or remove this line for piecewise-polytrope runs.
+# initial_data_table = /path/to/your/eos_table.h5
+
+user_hist          = true   # Enable custom history outputs (rho-max, alpha-min)
+
+# ---------------------------------------------------------------------------
+# Output files
+# ---------------------------------------------------------------------------
+
+# History file: global diagnostics (max density, min lapse) written frequently.
+# The minimum lapse tracks both the NS core and the collapsing BH region.
+<output1>
+file_type = hst
+dt        = 0.375
+
+# Equatorial slice of primitive MHD variables (density, velocity, pressure, B)
+<output2>
+file_type = bin
+variable  = mhd_w
+dt        = 1.5
+slice_x3  = 0.0
+
+# Equatorial slice of conserved MHD variables
+<output3>
+file_type = bin
+variable  = mhd_u
+dt        = 1.5
+slice_x3  = 0.0
+
+# Equatorial slice of Z4c spacetime variables
+<output4>
+file_type = bin
+variable  = z4c
+dt        = 1.5
+slice_x3  = 0.0
+
+# Equatorial slice of ADM metric variables
+<output5>
+file_type = bin
+variable  = adm
+dt        = 1.5
+slice_x3  = 0.0
+
+# Restart checkpoint written every 375 geometric-time units
+<output6>
+file_type = rst
+dt        = 375.0
